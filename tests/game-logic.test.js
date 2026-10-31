@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GameRoom } from "../src/index.js";
+import { ActivitySession, GameRoom } from "../src/index.js";
 import { WORD_BANK } from "../src/wordbank.js";
 
 function makeRoom({ word = "cat", category = "Animals", hintEnabled = true } = {}) {
@@ -148,4 +148,58 @@ test("A room accepts the maximum of ten clue rounds", async () => {
 test("A room rejects more than ten clue rounds", async () => {
   const { startResponse } = await makeStartedThreePlayerRoom(11);
   assert.equal(startResponse.status, 400);
+});
+
+
+function makeStorageContext(name = "ACTIVITY_TEST") {
+  const records = new Map();
+  return {
+    id: { name },
+    storage: {
+      get: async (key) => records.get(key) || null,
+      put: async (key, value) => records.set(key, structuredClone(value)),
+      deleteAll: async () => records.clear()
+    },
+    getWebSockets: () => [],
+    acceptWebSocket: () => {}
+  };
+}
+
+test("Discord Activity participants automatically share one room and duplicate entries reuse the same player", async () => {
+  const roomMap = new Map();
+  const env = {
+    GAME_ROOMS: {
+      idFromName: (name) => ({ name }),
+      get: (id) => {
+        if (!roomMap.has(id.name)) roomMap.set(id.name, new GameRoom(makeStorageContext(id.name), {}));
+        const room = roomMap.get(id.name);
+        return { fetch: (request) => room.fetch(request) };
+      }
+    }
+  };
+  const activity = new ActivitySession(makeStorageContext(), env);
+  const enter = (discordUserId, name) => activity.fetch(new Request("https://activity/enter", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ discordUserId, name })
+  }));
+
+  const firstResponse = await enter("12345678901234567", "Alex");
+  assert.equal(firstResponse.status, 201);
+  const first = await firstResponse.json();
+
+  const secondResponse = await enter("22345678901234567", "Alex");
+  assert.equal(secondResponse.status, 201);
+  const second = await secondResponse.json();
+  assert.equal(second.code, first.code);
+  assert.equal(second.state.players.length, 2);
+  assert.deepEqual(second.state.players.map((player) => player.name).sort(), ["Alex", "Alex 2"]);
+
+  const reconnectResponse = await enter("12345678901234567", "Alex");
+  assert.equal(reconnectResponse.status, 200);
+  const reconnect = await reconnectResponse.json();
+  assert.equal(reconnect.code, first.code);
+  assert.equal(reconnect.player.id, first.player.id);
+  assert.equal(reconnect.token, first.token);
+  assert.equal(reconnect.state.players.length, 2);
 });

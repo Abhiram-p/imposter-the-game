@@ -1,4 +1,8 @@
 const $ = (selector, root = document) => root.querySelector(selector);
+const bootParams = new URLSearchParams(location.search);
+const discordInstanceId = bootParams.get("instance_id") || "";
+const inDiscordFrame = bootParams.has("frame_id") && bootParams.has("instance_id") && bootParams.has("platform");
+const sessionStorageKey = inDiscordFrame ? `imposter-session:discord:${discordInstanceId}` : "imposter-session";
 const state = {
   code: null,
   token: null,
@@ -18,7 +22,7 @@ const state = {
 };
 
 const saved = (() => {
-  try { return JSON.parse(localStorage.getItem("imposter-session") || "null"); }
+  try { return JSON.parse(localStorage.getItem(sessionStorageKey) || "null"); }
   catch { return null; }
 })();
 
@@ -29,11 +33,11 @@ function escapeHTML(value) {
 }
 
 function saveSession() {
-  localStorage.setItem("imposter-session", JSON.stringify({ code: state.code, token: state.token, player: state.player }));
+  localStorage.setItem(sessionStorageKey, JSON.stringify({ code: state.code, token: state.token, player: state.player }));
 }
 
 function clearSession() {
-  localStorage.removeItem("imposter-session");
+  localStorage.removeItem(sessionStorageKey);
   state.code = state.token = state.player = state.room = state.me = null;
   state.lastSignature = "";
   state.revealVisible = false;
@@ -143,7 +147,7 @@ function renderHome() {
       <div class="eyebrow">The social deduction word game</div>
       <h1>Who doesn't<br>know the word?</h1>
       <p class="lead">Everyone gets the same secret word. Except one player. Give clues, stay convincing, and find the Imposter.</p>
-      ${state.discord?.user ? `<div class="muted-block" style="margin:16px 0">Connected to Discord as <strong>${escapeHTML(state.discord.user.global_name || state.discord.user.username || "Player")}</strong></div>` : state.discordError ? `<div class="muted-block" style="margin:16px 0">Discord connection unavailable: ${escapeHTML(state.discordError)}</div>` : ""}
+      ${state.discord?.user ? `<div class="muted-block" style="margin:16px 0">Connected to Discord as <strong>${escapeHTML(state.discord.user.global_name || state.discord.user.username || "Player")}</strong>. This Activity has its own shared game room.</div>` : state.discordError ? `<div class="muted-block" style="margin:16px 0">Discord connection unavailable: ${escapeHTML(state.discordError)}</div>` : ""}
       <div class="form-stack">
         <form id="create-form" class="form-stack">
           <div><label class="field-label" for="host-name">Your name</label><input class="input" id="host-name" maxlength="18" placeholder="Enter your player name" required autocomplete="nickname"></div>
@@ -226,7 +230,7 @@ function lobbyView() {
   return `
     <section class="panel wide">
       <div class="room-head">
-        <div><div class="eyebrow">Waiting room</div><h2>Bring your people in.</h2><p class="inline-note">Share the code. The game starts when everyone is ready.</p></div>
+        <div><div class="eyebrow">Waiting room</div><h2>Bring your people in.</h2><p class="inline-note">${state.discord ? "Players who open this Discord Activity join this same lobby automatically." : "Share the code. The game starts when everyone is ready."}</p></div>
         <div><div class="field-label">ROOM CODE</div><button class="room-code" id="copy-code" type="button">${escapeHTML(room.code)} <span>↗</span></button>${state.discord ? '<button class="btn btn-quiet" id="discord-invite" type="button" style="margin-top:8px">Invite to Discord channel</button>' : ""}</div>
       </div>
       <div class="section" style="border-top:0;padding-top:0;margin-top:0">
@@ -731,27 +735,39 @@ function attachRoomHandlers() {
 }
 
 async function setupDiscordActivity() {
-  const params = new URLSearchParams(location.search);
-  const insideDiscord = params.has("frame_id") && params.has("instance_id") && params.has("platform");
-  if (!insideDiscord) return;
+  if (!inDiscordFrame) return;
   try {
     const config = await api("/api/discord/config", { auth: false });
-    if (!config.enabled || !config.clientId) throw new Error("Add your Discord Application Client ID in wrangler.jsonc first.");
+    if (!config.enabled || !config.clientId) throw new Error("Discord Activity is not configured yet. Add your Application Client ID and deploy the Worker.");
+
     const { DiscordSDK } = await import("/discord-sdk.js");
     const sdk = new DiscordSDK(config.clientId);
     await sdk.ready();
+
     const { code } = await sdk.commands.authorize({
       client_id: config.clientId,
       response_type: "code",
-      state: crypto.randomUUID(),
+      state: "",
       prompt: "none",
       scope: ["identify", "applications.commands"]
     });
     const tokenData = await api("/api/discord/token", { method: "POST", body: { code }, auth: false });
     const auth = await sdk.commands.authenticate({ access_token: tokenData.access_token });
-    state.discord = { sdk, user: auth?.user || null };
+    if (!auth?.user?.id) throw new Error("Discord did not return your authenticated user.");
+
+    state.discord = { sdk, user: auth.user, instanceId: discordInstanceId };
+
+    // Every user opening this same Discord Activity instance is placed into the
+    // same game room. The Worker verifies the OAuth token with Discord first.
+    const entered = await api("/api/discord/enter", {
+      method: "POST",
+      auth: false,
+      body: { instanceId: sdk.instanceId, accessToken: tokenData.access_token }
+    });
+    setSession(entered);
+    await refreshRoom(true);
   } catch (error) {
-    state.discordError = error.message || "Discord connection failed.";
+    state.discordError = error.message || "Discord Activity connection failed.";
   }
 }
 
@@ -759,6 +775,7 @@ async function boot() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   await loadTopics();
   await setupDiscordActivity();
+  if (inDiscordFrame && state.code) return;
   const queryCode = new URLSearchParams(location.search).get("room");
   const session = saved;
   if (session?.code && session?.token) {

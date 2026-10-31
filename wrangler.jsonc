@@ -13,11 +13,16 @@
   },
   "durable_objects": {
     "bindings": [
-      { "name": "GAME_ROOMS", "class_name": "GameRoom" }
+      { "name": "GAME_ROOMS", "class_name": "GameRoom" },
+      { "name": "ACTIVITY_SESSIONS", "class_name": "ActivitySession" }
     ]
   },
   "exports": {
     "GameRoom": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ActivitySession": {
       "type": "durable-object",
       "storage": "sqlite"
     }

@@ -1,6 +1,6 @@
 {
   "name": "imposter-the-game",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "postinstall": "npm run build:discord",
     "build": "npm run build:discord",
     "deploy": "npm run build && wrangler deploy",
-    "check": "node --check src/index.js && node --check public/app.js",
+    "check": "node --check src/index.js && node --check public/app.js && node --check public/discord-sdk.js",
     "test": "node --test"
   },
   "devDependencies": {

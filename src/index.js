@@ -76,7 +76,7 @@ export default {
     if (request.method === "OPTIONS") return corsPreflight();
 
     if (url.pathname === "/api/health" && request.method === "GET") {
-      return json({ ok: true, app: "imposter-the-game", version: "1.2.0" });
+      return json({ ok: true, app: "imposter-the-game", version: "1.3.0" });
     }
 
     if (url.pathname === "/api/topics" && request.method === "GET") {
@@ -110,6 +110,33 @@ export default {
         return error(tokenData.error_description || "Discord authorization could not be completed.", 502);
       }
       return json({ access_token: tokenData.access_token, token_type: tokenData.token_type || "Bearer" });
+    }
+
+    if (url.pathname === "/api/discord/enter" && request.method === "POST") {
+      const body = await readJson(request) || {};
+      const instanceId = typeof body.instanceId === "string" ? body.instanceId.trim() : "";
+      const accessToken = typeof body.accessToken === "string" ? body.accessToken.trim() : "";
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(instanceId)) return error("Discord did not provide a valid Activity instance ID.");
+      if (!accessToken || accessToken.length > 4096) return error("Discord authentication is required to join this Activity.", 401);
+      if (!env.ACTIVITY_SESSIONS) return error("Discord Activity sessions are not configured. Deploy the latest Worker first.", 503);
+
+      // Verify the SDK-issued OAuth token with Discord. Never trust a user ID or name sent by the browser.
+      const identityResponse = await fetch("https://discord.com/api/v10/users/@me", {
+        headers: { "Authorization": `Bearer ${accessToken}`, "Accept": "application/json" }
+      });
+      const identity = await identityResponse.json().catch(() => ({}));
+      if (!identityResponse.ok || !identity.id) return error("Discord authentication expired. Reopen the Activity to reconnect.", 401);
+
+      const sessionId = env.ACTIVITY_SESSIONS.idFromName(`${String(env.DISCORD_CLIENT_ID || "app")}:${instanceId}`);
+      const session = env.ACTIVITY_SESSIONS.get(sessionId);
+      return session.fetch("https://activity/enter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          discordUserId: String(identity.id),
+          name: normalizeName(identity.global_name || identity.username || "Discord Player")
+        })
+      });
     }
 
     if (url.pathname === "/api/rooms" && request.method === "POST") {
@@ -512,5 +539,123 @@ export class GameRoom {
     if (message === "ping") {
       try { socket.send("pong"); } catch { /* ignore */ }
     }
+  }
+}
+
+
+/**
+ * One ActivitySession Durable Object coordinates the shared room for a Discord
+ * Activity instance. Every participant is verified by the Worker with Discord
+ * first, then idempotently mapped to a normal GameRoom player session.
+ */
+export class ActivitySession {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+    this.queue = Promise.resolve();
+  }
+
+  fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname !== "/enter" || request.method !== "POST") return error("Not found.", 404);
+    const operation = this.queue.then(() => this.enter(request), () => this.enter(request));
+    this.queue = operation.catch(() => {});
+    return operation;
+  }
+
+  async roomRequest(code, path, { method = "GET", token, body, init = false } = {}) {
+    const stub = this.env.GAME_ROOMS.get(this.env.GAME_ROOMS.idFromName(code));
+    const headers = {};
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (init) headers["x-room-code"] = code;
+    const target = new URL(`https://room/${path}`);
+    if (token) target.searchParams.set("token", token);
+    return stub.fetch(new Request(target, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body)
+    }));
+  }
+
+  async createRoom(hostName) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const code = randomCode();
+      const response = await this.roomRequest(code, "init", {
+        method: "POST", body: { hostName }, init: true
+      });
+      if (response.status === 409) continue;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return { error: data.error || "Could not create a Discord game room.", status: response.status };
+      return { data };
+    }
+    return { error: "Could not allocate a room code. Please relaunch the Activity.", status: 503 };
+  }
+
+  async joinRoom(code, baseName) {
+    for (let suffix = 1; suffix <= 20; suffix += 1) {
+      const suffixText = suffix === 1 ? "" : ` ${suffix}`;
+      const name = normalizeName(`${baseName.slice(0, 18 - suffixText.length)}${suffixText}`);
+      const response = await this.roomRequest(code, "join", { method: "POST", body: { name } });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) return { data };
+      if (!/already taken/i.test(data.error || "")) return { error: data.error || "Could not join the Discord game room.", status: response.status };
+    }
+    return { error: "Could not find a unique player name for this Discord account.", status: 409 };
+  }
+
+  async existingPlayer(code, savedPlayer) {
+    const [stateResponse, meResponse] = await Promise.all([
+      this.roomRequest(code, "state", { token: savedPlayer.token }),
+      this.roomRequest(code, "me", { token: savedPlayer.token })
+    ]);
+    if (!stateResponse.ok || !meResponse.ok) return null;
+    const [stateData, meData] = await Promise.all([stateResponse.json(), meResponse.json()]);
+    return { code, token: savedPlayer.token, player: savedPlayer.player, state: stateData.state, me: meData.me };
+  }
+
+  async enter(request) {
+    const body = await readJson(request) || {};
+    const discordUserId = typeof body.discordUserId === "string" ? body.discordUserId : "";
+    const name = normalizeName(body.name) || "Discord Player";
+    if (!/^\d{5,25}$/.test(discordUserId)) return error("Discord returned an invalid user ID.", 401);
+
+    let session = await this.ctx.storage.get("session") || { code: null, users: {} };
+    session.users ||= {};
+
+    if (session.code && session.users[discordUserId]) {
+      const existing = await this.existingPlayer(session.code, session.users[discordUserId]);
+      if (existing) return json(existing);
+      // The linked room may have expired. Start a clean Activity session below.
+      session = { code: null, users: {} };
+    }
+
+    if (!session.code) {
+      const created = await this.createRoom(name);
+      if (created.error) return error(created.error, created.status);
+      const data = created.data;
+      session.code = data.code;
+      session.users[discordUserId] = { token: data.token, player: data.player };
+      await this.ctx.storage.put("session", session);
+      return json(data, 201);
+    }
+
+    const joined = await this.joinRoom(session.code, name);
+    if (joined.error && joined.status === 404) {
+      // If the underlying game room expired while this Activity directory remained,
+      // allocate a fresh room and start a fresh participant map.
+      session = { code: null, users: {} };
+      const recreated = await this.createRoom(name);
+      if (recreated.error) return error(recreated.error, recreated.status);
+      const data = recreated.data;
+      session.code = data.code;
+      session.users[discordUserId] = { token: data.token, player: data.player };
+      await this.ctx.storage.put("session", session);
+      return json(data, 201);
+    }
+    if (joined.error) return error(joined.error, joined.status);
+    const data = joined.data;
+    session.users[discordUserId] = { token: data.token, player: data.player };
+    await this.ctx.storage.put("session", session);
+    return json(data, 201);
   }
 }

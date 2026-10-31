@@ -1,4 +1,4 @@
-const CACHE_NAME = "imposter-shell-v1.2.0";
+const CACHE_NAME = "imposter-shell-v1.3.0";
 const APP_SHELL = ["/", "/index.html", "/styles.css", "/app.js", "/wordbank.json", "/discord-sdk.js"];
 
 self.addEventListener("install", (event) => {

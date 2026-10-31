@@ -1,6 +1,6 @@
 # Imposter — Cloudflare V1
 
-A multiplayer word game with online rooms, offline pass-the-phone play, adjustable clue rounds, and Discord Activity integration (v1.2.0). The project is designed to be deployed as **one Cloudflare Worker** with Static Assets for the website and a SQLite-backed Durable Object for each game room.
+A multiplayer word game with online rooms, offline pass-the-phone play, adjustable clue rounds, and Discord Activity integration (v1.3.0). The project is designed to be deployed as **one Cloudflare Worker** with Static Assets for the website and a SQLite-backed Durable Object for each game room.
 
 ## What is included
 
@@ -97,18 +97,23 @@ Wrangler will ask you to log in if you are not already authenticated. Local Dura
 - **Workers Static Assets** serves `public/`.
 - **Worker** in `src/index.js` handles API requests.
 - **Durable Object** `GameRoom` owns each room and its SQLite-backed persistent state.
+- **Durable Object** `ActivitySession` maps a Discord Activity `instanceId` and verified Discord user IDs onto the shared game room.
 - `data/wordbank.json` and `src/wordbank.js` are deployed with the Worker code, not in the public assets directory.
 
 No Pages project is required for this single-deployment setup. It avoids splitting the website and game API into separate Cloudflare projects during the first release.
 
-## V1.2 — Multi-round games and Discord Activity integration
+## V1.3 — Automatic Discord Activity rooms
 
 - The host chooses 3–10 clue rounds. The backend rejects values below 3 or above 10.
 - Each player submits one one-word clue per round. The current round advances only after every player has submitted a clue. Voting remains locked until all configured rounds are complete.
 - Online voting uses the existing private player vote and tie-break / final-guess flow. The result screen groups clues by round.
 - Offline mode uses a host-controlled round advance after the group finishes each spoken clue round, then passes the phone privately to each voter. The final vote tally is shown before the host reveals the word and Imposter identities.
 - `npm install` runs a postinstall build that bundles `@discord/embedded-app-sdk` into `public/discord-sdk.js`; the bundle is served from the same Worker origin and does not rely on a CDN at runtime.
-- Inside a Discord Activity, the app authenticates through the Embedded App SDK. Discord usernames are prefilled as player names, and the lobby can open Discord’s invite dialog. The game itself continues to use the normal room code and Cloudflare room backend.
+- Inside a Discord Activity, the app authenticates through the Embedded App SDK and automatically enters a shared room keyed to Discord's Activity `instance_id`.
+- The Worker verifies each OAuth access token with Discord's `/users/@me` endpoint before accepting the identity. The client cannot choose another user's Discord ID or display name. The SDK's `instanceId` is the room key; Discord documents that participants joining the same Activity instance receive the same ID.
+- A SQLite-backed `ActivitySession` Durable Object creates one room for the Activity instance and idempotently maps each Discord user to one game player. Reopening the Activity returns the same player session instead of duplicating the player.
+- Friends who open the same Activity instance are added to the same lobby automatically; no six-character room code is needed inside Discord. Regular web rooms and pass-the-phone offline mode remain available outside Discord.
+- The lobby can open Discord's native channel invite dialog. The Activity uses the same round, clue, vote, tie-break, final-guess and result flow as web multiplayer.
 
 ### Discord Activity setup
 
@@ -119,9 +124,9 @@ No Pages project is required for this single-deployment setup. It avoids splitti
 5. In Cloudflare, open the `imposter-the-game` Worker → **Settings → Variables and Secrets**. Add `DISCORD_CLIENT_SECRET` as an encrypted **Secret** and deploy again. Never commit this secret to GitHub.
 6. In the Discord Developer Portal, open **Activities → URL Mappings**. Add prefix `/` mapped to the Worker hostname, for example `imposter-the-game.<your-subdomain>.workers.dev` (omit `https://`). This root mapping routes the Activity page and its `/api/*` requests through Discord's proxy.
 7. Under **Activities → Settings**, enable Activities. Discord creates a default **Launch** Entry Point command.
-8. Enable Developer Mode in your Discord client, join a test voice channel, open the Activity Shelf and launch the app. The first launch should complete Discord authorization and prefill the Discord username in the player-name fields.
+8. Enable Developer Mode in your Discord client, join a test voice channel, open the Activity Shelf and launch the app. The first launch completes Discord authorization and automatically creates or joins that Activity instance's shared room.
 
-The Discord Activity integration is prepared in this project, but it is not registered, enabled, or published on your Discord account automatically. You must complete the Developer Portal and Cloudflare configuration above and test it from a Discord developer account. The invite button invites friends to the Discord channel; they still join the in-game room using its six-character room code. The current integration authenticates the Discord user and pre-fills their display name; it does not automatically add every Activity participant to the game room. Testing as a developer/team member is separate from publishing an Activity for general discovery.
+The Discord Activity integration is implemented in the project, but it is not registered, enabled, or published on your Discord account automatically. You must complete the Developer Portal and Cloudflare configuration above and test it from a Discord developer account. Every person who launches the same Activity instance is automatically placed in that instance's shared game room. An Activity instance has its own room; launching the game separately creates a separate room. During development, unverified Activities are restricted to the app's developer team. Public discovery/distribution may require Discord's review and compliance steps.
 
 ## V1 limitations
 
@@ -147,8 +152,8 @@ The local mode makes no API calls and requires no room code. It works offline af
 The word bank must be downloaded to the browser for offline play, so its topic and word lists are not a security boundary. The chosen secret word and Imposter identities are only shown in the local device's role reveal and end-of-round result.
 
 
-### Updating from v1.1.0
+### Updating from v1.2.0
 
-Upload the contents of this release ZIP to the root of the existing GitHub repository and commit to `main`. Keep the Cloudflare Worker build command as `npm install` and deploy command as `npx wrangler deploy`. The `postinstall` lifecycle bundles the Discord SDK during the `npm install` build step. The updated Worker creates new room state for multi-round games. If a room was already in progress during the update, have the host reset it and start a new game after deploying v1.2.0.
+Upload the contents of this release ZIP to the root of the existing GitHub repository and commit to `main`. Keep the Cloudflare Worker build command as `npm install` and deploy command as `npx wrangler deploy`. The `postinstall` lifecycle bundles the Discord SDK during the `npm install` build step. This release adds a new SQLite-backed `ActivitySession` Durable Object namespace, declared through Wrangler's `exports` configuration. Cloudflare will provision this new namespace on deployment; the existing `GameRoom` namespace remains in place.
 
 The Discord integration remains optional for ordinary web play. If you have not configured a Discord Client ID and Client Secret, the main website and online/offline modes continue to work normally.
