@@ -1,0 +1,119 @@
+{
+  "package": "imposter-v1-wordbank",
+  "version": "1.0.0",
+  "created": "2026-10-31",
+  "language": "en",
+  "wordCount": 2000,
+  "topicCount": 21,
+  "formats": [
+    "json",
+    "csv"
+  ],
+  "topics": [
+    {
+      "id": "animals-wildlife",
+      "name": "Animals & Wildlife",
+      "wordCount": 96
+    },
+    {
+      "id": "food-ingredients",
+      "name": "Food & Ingredients",
+      "wordCount": 96
+    },
+    {
+      "id": "drinks-desserts",
+      "name": "Drinks & Desserts",
+      "wordCount": 96
+    },
+    {
+      "id": "home-furniture",
+      "name": "Home & Furniture",
+      "wordCount": 96
+    },
+    {
+      "id": "kitchen-dining",
+      "name": "Kitchen & Dining",
+      "wordCount": 96
+    },
+    {
+      "id": "clothing-accessories",
+      "name": "Clothing & Accessories",
+      "wordCount": 95
+    },
+    {
+      "id": "places-buildings",
+      "name": "Places & Buildings",
+      "wordCount": 95
+    },
+    {
+      "id": "nature-outdoors",
+      "name": "Nature & Outdoors",
+      "wordCount": 95
+    },
+    {
+      "id": "vehicles-transport",
+      "name": "Vehicles & Transport",
+      "wordCount": 95
+    },
+    {
+      "id": "sports-fitness",
+      "name": "Sports & Fitness",
+      "wordCount": 95
+    },
+    {
+      "id": "games-toys",
+      "name": "Games & Toys",
+      "wordCount": 95
+    },
+    {
+      "id": "jobs-professions",
+      "name": "Jobs & Professions",
+      "wordCount": 95
+    },
+    {
+      "id": "technology-electronics",
+      "name": "Technology & Electronics",
+      "wordCount": 95
+    },
+    {
+      "id": "school-office",
+      "name": "School & Office",
+      "wordCount": 95
+    },
+    {
+      "id": "tools-hardware",
+      "name": "Tools & Hardware",
+      "wordCount": 95
+    },
+    {
+      "id": "music-arts",
+      "name": "Music & Arts",
+      "wordCount": 95
+    },
+    {
+      "id": "movies-entertainment",
+      "name": "Movies & Entertainment",
+      "wordCount": 95
+    },
+    {
+      "id": "travel-geography",
+      "name": "Travel & Geography",
+      "wordCount": 95
+    },
+    {
+      "id": "weather-space",
+      "name": "Weather & Space",
+      "wordCount": 95
+    },
+    {
+      "id": "plants-gardening",
+      "name": "Plants & Gardening",
+      "wordCount": 95
+    },
+    {
+      "id": "body-health",
+      "name": "Body & Health",
+      "wordCount": 95
+    }
+  ]
+}
