@@ -1,15 +1,23 @@
 {
   "name": "imposter-the-game",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "preview": "wrangler preview",
-    "deploy": "wrangler deploy",
-    "check": "wrangler types && node --check src/index.js"
+    "build:discord": "esbuild src/discord-sdk-entry.js --bundle --format=esm --platform=browser --target=es2022 --outfile=public/discord-sdk.js",
+    "postinstall": "npm run build:discord",
+    "build": "npm run build:discord",
+    "deploy": "npm run build && wrangler deploy",
+    "check": "node --check src/index.js && node --check public/app.js",
+    "test": "node --test"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "@discord/embedded-app-sdk": "2.5.0",
+    "esbuild": "0.28.2"
   }
 }

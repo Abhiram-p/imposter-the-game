@@ -2,6 +2,8 @@ import { WORD_BANK } from "./wordbank.js";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const MAX_PLAYERS = 12;
+const MIN_ROUNDS = 3;
+const MAX_ROUNDS = 10;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 
 function corsHeaders() {
@@ -59,6 +61,11 @@ function topicList() {
   return WORD_BANK.topics.map(({ id, name, description, wordCount }) => ({ id, name, description, wordCount }));
 }
 
+function validRoundCount(value) {
+  const rounds = Number(value ?? MIN_ROUNDS);
+  return Number.isInteger(rounds) && rounds >= MIN_ROUNDS && rounds <= MAX_ROUNDS ? rounds : null;
+}
+
 function corsPreflight() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
@@ -69,11 +76,40 @@ export default {
     if (request.method === "OPTIONS") return corsPreflight();
 
     if (url.pathname === "/api/health" && request.method === "GET") {
-      return json({ ok: true, app: "imposter-the-game", version: "1.0.0" });
+      return json({ ok: true, app: "imposter-the-game", version: "1.2.0" });
     }
 
     if (url.pathname === "/api/topics" && request.method === "GET") {
       return json({ topics: topicList(), wordCount: WORD_BANK.wordCount });
+    }
+
+    if (url.pathname === "/api/discord/config" && request.method === "GET") {
+      const clientId = String(env.DISCORD_CLIENT_ID || "").trim();
+      return json({ enabled: Boolean(clientId && clientId !== "YOUR_DISCORD_APPLICATION_CLIENT_ID"), clientId });
+    }
+
+    if (url.pathname === "/api/discord/token" && request.method === "POST") {
+      const body = await readJson(request);
+      const code = typeof body?.code === "string" ? body.code.trim() : "";
+      const clientId = String(env.DISCORD_CLIENT_ID || "").trim();
+      const clientSecret = String(env.DISCORD_CLIENT_SECRET || "").trim();
+      if (!clientId || !clientSecret) return error("Discord Activity authentication is not configured yet.", 503);
+      if (!code || code.length > 1024) return error("A valid Discord authorization code is required.");
+      const tokenResponse = await fetch("https://discord.com/api/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          grant_type: "authorization_code",
+          code
+        })
+      });
+      const tokenData = await tokenResponse.json().catch(() => ({}));
+      if (!tokenResponse.ok || !tokenData.access_token) {
+        return error(tokenData.error_description || "Discord authorization could not be completed.", 502);
+      }
+      return json({ access_token: tokenData.access_token, token_type: tokenData.token_type || "Bearer" });
     }
 
     if (url.pathname === "/api/rooms" && request.method === "POST") {
@@ -131,6 +167,13 @@ export class GameRoom {
   async loadRoom() {
     const room = await this.ctx.storage.get("room");
     if (!room) return null;
+    room.settings ||= { topics: WORD_BANK.topics.map((topic) => topic.id), imposterCount: 1, imposterHint: true, rounds: MIN_ROUNDS };
+    if (!Number.isInteger(room.settings.rounds)) room.settings.rounds = MIN_ROUNDS;
+    if (!Array.isArray(room.roundClues)) {
+      room.roundClues = [room.clues || {}];
+      room.currentRound = 1;
+    }
+    if (!Number.isInteger(room.currentRound)) room.currentRound = 1;
     if (Date.now() - room.updatedAt > ROOM_TTL_MS && room.phase !== "lobby") {
       await this.ctx.storage.deleteAll();
       return null;
@@ -150,15 +193,27 @@ export class GameRoom {
 
   publicState(room) {
     const playerNames = new Map(room.players.map((player) => [player.id, player.name]));
+    const currentClues = room.roundClues?.[Math.max(0, (room.currentRound || 1) - 1)] || room.clues || {};
+    const allClues = (room.roundClues || [room.clues || {}]).flatMap((round, index) =>
+      Object.entries(round || {}).map(([playerId, text]) => ({
+        round: index + 1,
+        playerId,
+        playerName: playerNames.get(playerId) || "Player",
+        text
+      }))
+    );
     const output = {
       code: room.code,
       phase: room.phase,
       hostId: room.hostId,
       players: room.players.map(({ id, name, isHost, ready, online }) => ({ id, name, isHost, ready, online })),
       settings: room.settings,
-      clues: Object.entries(room.clues).map(([playerId, text]) => ({ playerId, playerName: playerNames.get(playerId) || "Player", text })),
-      clueCount: Object.keys(room.clues).length,
-      voteCount: Object.keys(room.votes).length,
+      currentRound: room.currentRound || 1,
+      totalRounds: room.settings.rounds || MIN_ROUNDS,
+      clues: Object.entries(currentClues).map(([playerId, text]) => ({ playerId, playerName: playerNames.get(playerId) || "Player", text })),
+      allClues,
+      clueCount: Object.keys(currentClues).length,
+      voteCount: Object.keys(room.votes || {}).length,
       playerCount: room.players.length,
       accusedPlayer: room.accusedPlayerId ? { id: room.accusedPlayerId, name: playerNames.get(room.accusedPlayerId) || "Player" } : null,
       tiedPlayers: (room.tiedPlayerIds || []).map((id) => ({ id, name: playerNames.get(id) || "Player" })),
@@ -174,7 +229,8 @@ export class GameRoom {
         votes: Object.entries(room.votes).map(([voterId, targetId]) => ({
           voterName: playerNames.get(voterId) || "Player",
           targetName: playerNames.get(targetId) || "Player"
-        }))
+        })),
+        clues: allClues
       };
     }
     return output;
@@ -182,16 +238,20 @@ export class GameRoom {
 
   privateState(room, player) {
     const isImposter = room.imposterIds.includes(player.id);
+    const currentClues = room.roundClues?.[Math.max(0, (room.currentRound || 1) - 1)] || room.clues || {};
     return {
       player: { id: player.id, name: player.name, isHost: player.isHost },
       phase: room.phase,
       role: room.phase === "lobby" ? null : (isImposter ? "imposter" : "civilian"),
       word: room.phase === "lobby" || isImposter ? null : room.secretWord,
       category: room.phase === "lobby" ? null : room.categoryName,
-      hint: room.phase !== "lobby" && isImposter && room.settings.imposterHint ? room.categoryName : null,
+      hint: room.phase !== "lobby" && isImposter && room.settings.imposterHint
+        && String(room.categoryName || "").normalize("NFKC").trim().toLocaleLowerCase()
+          !== String(room.secretWord || "").normalize("NFKC").trim().toLocaleLowerCase()
+        ? room.categoryName : null,
       ready: Boolean(player.ready),
-      hasClue: Boolean(room.clues[player.id]),
-      clue: room.clues[player.id] || null,
+      hasClue: Boolean(currentClues[player.id]),
+      clue: currentClues[player.id] || null,
       hasVoted: Object.prototype.hasOwnProperty.call(room.votes, player.id),
       isAccused: room.accusedPlayerId === player.id,
       canGuess: room.phase === "final_guess" && room.accusedPlayerId === player.id && isImposter
@@ -228,7 +288,7 @@ export class GameRoom {
         phase: "lobby",
         hostId: host.id,
         players: [host],
-        settings: { topics: WORD_BANK.topics.map((topic) => topic.id), imposterCount: 1, imposterHint: true },
+        settings: { topics: WORD_BANK.topics.map((topic) => topic.id), imposterCount: 1, imposterHint: true, rounds: MIN_ROUNDS },
         secretWord: null,
         categoryId: null,
         categoryName: null,
@@ -285,6 +345,8 @@ export class GameRoom {
       const body = await readJson(request) || {};
       const selectedTopics = Array.isArray(body.topics) ? [...new Set(body.topics.filter((id) => WORD_BANK.topics.some((topic) => topic.id === id)))] : room.settings.topics;
       if (!selectedTopics.length) return error("Choose at least one topic.");
+      const rounds = validRoundCount(body.rounds ?? room.settings.rounds ?? MIN_ROUNDS);
+      if (!rounds) return error(`Choose between ${MIN_ROUNDS} and ${MAX_ROUNDS} clue rounds.`);
       const availableTopics = WORD_BANK.topics.filter((topic) => selectedTopics.includes(topic.id));
       const topic = availableTopics[crypto.getRandomValues(new Uint32Array(1))[0] % availableTopics.length];
       const word = topic.words[crypto.getRandomValues(new Uint32Array(1))[0] % topic.words.length];
@@ -298,13 +360,16 @@ export class GameRoom {
       room.settings = {
         topics: selectedTopics,
         imposterCount,
-        imposterHint: body.imposterHint !== false
+        imposterHint: body.imposterHint !== false,
+        rounds
       };
       room.secretWord = word;
       room.categoryId = topic.id;
       room.categoryName = topic.name;
       room.imposterIds = shuffled.slice(0, imposterCount).map((item) => item.id);
       room.phase = "reveal";
+      room.currentRound = 1;
+      room.roundClues = Array.from({ length: rounds }, () => ({}));
       room.players.forEach((item) => { item.ready = false; });
       room.clues = {};
       room.votes = {};
@@ -327,12 +392,17 @@ export class GameRoom {
 
     if (path === "/clue" && request.method === "POST") {
       if (room.phase !== "clues") return error("Clues are not being collected right now.", 409);
-      if (room.clues[player.id]) return error("You have already submitted a clue.", 409);
+      const roundClues = room.roundClues[Math.max(0, room.currentRound - 1)] || {};
+      if (roundClues[player.id]) return error("You have already submitted a clue for this round.", 409);
       const body = await readJson(request);
       const clue = typeof body?.clue === "string" ? body.clue.trim() : "";
       if (!clue || clue.length > 24 || /\s/.test(clue)) return error("Enter one word (up to 24 characters).");
-      room.clues[player.id] = clue;
-      if (room.players.every((item) => Boolean(room.clues[item.id]))) room.phase = "voting";
+      roundClues[player.id] = clue;
+      room.roundClues[room.currentRound - 1] = roundClues;
+      if (room.players.every((item) => Boolean(roundClues[item.id]))) {
+        if (room.currentRound < room.settings.rounds) room.currentRound += 1;
+        else room.phase = "voting";
+      }
       await this.saveRoom(room);
       await this.broadcast(room);
       return json({ state: this.publicState(room) });
@@ -385,6 +455,8 @@ export class GameRoom {
       room.categoryId = null;
       room.categoryName = null;
       room.imposterIds = [];
+      room.currentRound = 1;
+      room.roundClues = [];
       room.clues = {};
       room.votes = {};
       room.accusedPlayerId = null;

@@ -4,6 +4,7 @@
   "main": "src/index.js",
   "compatibility_date": "2026-10-31",
   "observability": { "enabled": true },
+  "vars": { "DISCORD_CLIENT_ID": "YOUR_DISCORD_APPLICATION_CLIENT_ID" },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
