@@ -1,0 +1,15 @@
+{
+  "name": "imposter-the-game",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "preview": "wrangler preview",
+    "deploy": "wrangler deploy",
+    "check": "wrangler types && node --check src/index.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

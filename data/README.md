@@ -1,0 +1,1 @@
+The word bank contains 2,000 unique English words grouped into 21 selectable topics. `wordbank.json` is the canonical dataset. `src/wordbank.js` is the Worker-bundled copy; keep it in sync if you edit the JSON.

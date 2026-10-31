@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#101114" />
+  <meta name="description" content="A multiplayer word game of clues, bluffing and deduction." />
+  <title>Imposter — Word Game</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Imposter home"><span class="brand-mark">I</span><span>IMPOSTER</span></a>
+      <span class="topbar-note">A word game of wit &amp; deception</span>
+    </header>
+    <main id="view" class="view" aria-live="polite">
+      <section class="loading panel"><div class="loader"></div><p>Getting the game ready…</p></section>
+    </main>
+    <footer class="footer"><span>IMPOSTER</span><span>Read between the words.</span></footer>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
