@@ -14,7 +14,7 @@ Everyday foods, ingredients, fruit, vegetables and meals.
 
 apple, apricot, avocado, bacon, bagel, banana, barley, basil, bean, beef
 
-## Drinks & Desserts — 96 words
+## Drinks & Desserts — 96 words.
 
 Drinks, sweet treats, baked goods and desserts.
 
